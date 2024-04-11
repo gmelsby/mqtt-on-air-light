@@ -7,6 +7,7 @@ import time
 import wifi
 import adafruit_minimqtt.adafruit_minimqtt as MQTT
 
+
 # retrieve mqtt info
 mqtt_port = os.getenv("MQTT_PORT")
 mqtt_address = os.getenv("MQTT_ADDRESS")
@@ -89,4 +90,8 @@ time.sleep(0.5);
 on_camera_led.value = False;
 
 while True:
-    mqtt_client.loop()
+    try:
+        mqtt_client.loop()
+    except (MQTT.MMQTTException) as e:
+        print(f"MMQTTException: {e}")
+        time.sleep(500)
