@@ -24,8 +24,21 @@ on_camera_led.direction = digitalio.Direction.OUTPUT
 on_air_led.value = True
 on_camera_led.value = False
 
+# pattern that indicates something has gone wrong with wifi/mqtt connection
+def error_flash(sleep_time):
+    on_air_led.value = False
+    on_camera_led.value = not on_camera_led.value
+    time.sleep(sleep_time)
+
 # Get wifi info
-wifi.radio.connect(os.getenv('MY_SSID'), os.getenv('MY_PASS'))
+# Loop until able to connect
+while wifi.radio.connected == False:
+    try:
+        wifi.radio.connect(os.getenv('MY_SSID'), os.getenv('MY_PASS'))
+    except (ConnectionError) as e:
+        print(f"ConnectionError: {e}")
+        error_flash(0.5)
+
 pool = socketpool.SocketPool(wifi.radio)
 print('connected to wifi')
 
@@ -83,15 +96,19 @@ mqtt_client.connect()
 mqtt_client.publish(light_feed, "off", qos=1, retain=True)
 mqtt_client.subscribe(light_feed, 1)
 
-# flash on_camera_led to signal we have connected to wifi
-on_air_led.value = False;
-on_camera_led.value = True;
-time.sleep(0.5);
-on_camera_led.value = False;
+# flash on both leds to signal we have connected to wifi
+on_air_led.value = True
+on_camera_led.value = True
+time.sleep(1)
+on_air_led.value = False
+on_camera_led.value = False
 
 while True:
+    # make sure we are connected to wifi, if not show error blink
+    while wifi.radio.connected == False:
+        error_flash(0.5)
     try:
         mqtt_client.loop()
     except (MQTT.MMQTTException) as e:
         print(f"MMQTTException: {e}")
-        time.sleep(500)
+        time.sleep(0.5)
