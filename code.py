@@ -23,6 +23,7 @@ on_camera_led.direction = digitalio.Direction.OUTPUT
 
 on_air_led.value = True
 on_camera_led.value = False
+last_state = "off"
 
 # pattern that indicates something has gone wrong with wifi/mqtt connection
 def error_flash(sleep_time, mqtt_err=False):
@@ -41,22 +42,14 @@ while not wifi.radio.connected:
         wifi.radio.connect(os.getenv('MY_SSID'), os.getenv('MY_PASS'))
     except (ConnectionError) as e:
         print(f"ConnectionError: {e}")
-        error_flash(0.5)
+        # time for error_flash can be 0 because the try takes about half a second it seemss
+        error_flash(0)
 
 pool = socketpool.SocketPool(wifi.radio)
 print('connected to wifi')
 
 #  prints IP address to REPL
 print("My IP address is", wifi.radio.ipv4_address)
-
-# connect to mqtt server
-mqtt_client = MQTT.MQTT(
-    broker=mqtt_address,
-    port=mqtt_port,
-    username=mqtt_username,
-    password=mqtt_password,
-    socket_pool=pool,
-)
 
 # define callback functions
 def connect(mqtt_client, userdata, flags, rc):
@@ -78,6 +71,10 @@ def on_message(client, topic, message):
     print("New message on topic {0}: {1}".format(topic, message))
     if not (topic == light_feed):
         return
+    process_message(message)
+
+def process_message(message):
+    last_state = message
     if message == "off":
         on_air_led.value = False
         on_camera_led.value = False
@@ -88,39 +85,65 @@ def on_message(client, topic, message):
         on_camera_led.value = True
         on_air_led.value = False
 
-# setup callback methods
-mqtt_client.on_connect = connect
-mqtt_client.on_disconnect = disconnect
-mqtt_client.on_message = on_message
+def new_mqtt_client():
+    print("Creating new client")
+    
+    new_client = MQTT.MQTT(
+        broker=mqtt_address,
+        port=mqtt_port,
+        username=mqtt_username,
+        password=mqtt_password,
+        socket_pool=pool,
+    )
 
-# make sure we have last will and testament set before connecting
-mqtt_client.will_set(light_feed, "offline", qos=1, retain=True)
-print(f"attempting to connect to mqtt at {mqtt_client.broker} on port {mqtt_client.port}")
-mqtt_client.connect()
-while not mqtt_client.is_connected():
-    error_flash(0.5, mqtt_err=True)
-mqtt_client.publish(light_feed, "off", qos=1, retain=True)
-mqtt_client.subscribe(light_feed, 1)
+    # setup callback methods
+    new_client.on_connect = connect
+    new_client.on_disconnect = disconnect
+    new_client.on_message = on_message
+    
+    # make sure we have last will and testament set
+    new_client.will_set(light_feed, "offline", qos=1, retain=True)
+    
+    print(f"attempting to connect to mqtt at {new_client.broker} on port {new_client.port}")
+    new_client.connect()
+    while not new_client.is_connected():
+        error_flash(0.5, mqtt_err=True)
+    new_client.publish(light_feed, last_state, qos=1, retain=True)
+    new_client.subscribe(light_feed, 1)
+    return new_client
+    
+mqtt_client = new_mqtt_client()
 
-# flash on both leds to signal we have connected to wifi
+
+# flash on both leds to signal we have connected
 on_air_led.value = True
 on_camera_led.value = True
 time.sleep(1)
 on_air_led.value = False
 on_camera_led.value = False
 
+disconnect_flag = False # for indicating that led should be reset to last state
 while True:
     # make sure we are connected to wifi, if not show error blink
     while not wifi.radio.connected:
+        disconnect_flag = True
         error_flash(0.5)
+        print(last_state)
+
     # make sure we are connected to mqtt, if not show error blink
     while not mqtt_client.is_connected():
+        disconnect_flag = True
         error_flash(0.5, mqtt_err=True)
+        
+    # reset led from error flashing to prior state
+    if disconnect_flag:
+        process_message(last_state)
+    
     try:
         mqtt_client.loop()
     except (MQTT.MMQTTException) as e:
         print(f"MMQTTException: {e}")
-        error_flash(0.5, mqtt_err=True)
+        mqtt_client = new_mqtt_client()
     except (BrokenPipeError) as e:
         print(f"BrokenPipeError: {e}")
-        error_flash(0.5, mqtt_err=True)
+        mqtt_client = new_mqtt_client()
