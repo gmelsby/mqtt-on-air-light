@@ -25,14 +25,18 @@ on_air_led.value = True
 on_camera_led.value = False
 
 # pattern that indicates something has gone wrong with wifi/mqtt connection
-def error_flash(sleep_time):
-    on_air_led.value = False
-    on_camera_led.value = not on_camera_led.value
+def error_flash(sleep_time, mqtt_err=False):
+    leds = [on_air_led, on_camera_led]
+    # blink other led if mqtt err is true
+    if mqtt_err:
+        leds.reverse()
+    leds[0].value = False
+    leds[1].value = not leds[1].value
     time.sleep(sleep_time)
 
 # Get wifi info
 # Loop until able to connect
-while wifi.radio.connected == False:
+while not wifi.radio.connected:
     try:
         wifi.radio.connect(os.getenv('MY_SSID'), os.getenv('MY_PASS'))
     except (ConnectionError) as e:
@@ -93,6 +97,8 @@ mqtt_client.on_message = on_message
 mqtt_client.will_set(light_feed, "offline", qos=1, retain=True)
 print(f"attempting to connect to mqtt at {mqtt_client.broker} on port {mqtt_client.port}")
 mqtt_client.connect()
+while not mqtt_client.is_connected():
+    error_flash(0.5, mqtt_err=True)
 mqtt_client.publish(light_feed, "off", qos=1, retain=True)
 mqtt_client.subscribe(light_feed, 1)
 
@@ -105,10 +111,16 @@ on_camera_led.value = False
 
 while True:
     # make sure we are connected to wifi, if not show error blink
-    while wifi.radio.connected == False:
+    while not wifi.radio.connected:
         error_flash(0.5)
+    # make sure we are connected to mqtt, if not show error blink
+    while not mqtt_client.is_connected():
+        error_flash(0.5, mqtt_err=True)
     try:
         mqtt_client.loop()
     except (MQTT.MMQTTException) as e:
         print(f"MMQTTException: {e}")
-        time.sleep(0.5)
+        error_flash(0.5, mqtt_err=True)
+    except (BrokenPipeError) as e:
+        print(f"BrokenPipeError: {e}")
+        error_flash(0.5, mqtt_err=True)
