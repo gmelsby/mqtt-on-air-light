@@ -23,7 +23,7 @@ on_camera_led.direction = digitalio.Direction.OUTPUT
 
 on_air_led.value = True
 on_camera_led.value = False
-last_state = "off"
+state_history = ["off"]
 
 # pattern that indicates something has gone wrong with wifi/mqtt connection
 def error_flash(sleep_time, mqtt_err=False):
@@ -74,7 +74,8 @@ def on_message(client, topic, message):
     process_message(message)
 
 def process_message(message):
-    last_state = message
+    if message != "offline":
+        state_history[0] = message
     if message == "off":
         on_air_led.value = False
         on_camera_led.value = False
@@ -108,8 +109,9 @@ def new_mqtt_client():
     new_client.connect()
     while not new_client.is_connected():
         error_flash(0.5, mqtt_err=True)
-    new_client.publish(light_feed, last_state, qos=1, retain=True)
     new_client.subscribe(light_feed, 1)
+    time.sleep(2)
+    new_client.publish(light_feed, state_history[0], qos=1, retain=True)
     return new_client
     
 mqtt_client = new_mqtt_client()
@@ -128,7 +130,6 @@ while True:
     while not wifi.radio.connected:
         disconnect_flag = True
         error_flash(0.5)
-        print(last_state)
 
     # make sure we are connected to mqtt, if not show error blink
     while not mqtt_client.is_connected():
@@ -137,7 +138,8 @@ while True:
         
     # reset led from error flashing to prior state
     if disconnect_flag:
-        process_message(last_state)
+        process_message(state_history[0])
+        disconnect_flag = False
     
     try:
         mqtt_client.loop()
