@@ -12,11 +12,11 @@ class LightClient(MQTT.MQTT):
     """
     Extension of MQTT class that helps with encapsulation
     """
-    
+
     def __init__(self, broker, port, username, password, socket_pool, light_feed, on_air_led, on_camera_led, initial_state='off'):
         super().__init__(broker=broker, port=port, username=username, password=password, socket_pool=socket_pool)
         print("Creating new client")
-        
+
         self.current_state = initial_state
         self.light_feed = light_feed
         self.on_air_led=on_air_led
@@ -28,7 +28,7 @@ class LightClient(MQTT.MQTT):
         print(f"attempting to connect to mqtt at {broker} on port {port}")
         self.connect()
         self.subscribe(light_feed, 1)
-    
+
     # define callback functions
     def on_connect(self, mqtt_client, userdata, flags, rc):
         print("Connected to MQTT Broker!")
@@ -51,7 +51,7 @@ class LightClient(MQTT.MQTT):
         if message == "offline":
             self.publish(self.light_feed, self.current_state, qos=1, retain=True)
             return
-        
+
         self.current_state = message
         if message == "off":
             self.on_air_led.value = False
@@ -62,9 +62,9 @@ class LightClient(MQTT.MQTT):
         elif message == "on-camera":
             self.on_camera_led.value = True
             self.on_air_led.value = False
-            
-            
-    # adjusts leds to display current state        
+
+
+    # adjusts leds to display current state
     def display_current_state(self):
         self.process_message(self.current_state)
 
@@ -146,9 +146,11 @@ while True:
 
     try:
         mqtt_client.loop()
-    except (MQTT.MMQTTException) as e:
-        print(f"MMQTTException: {e}")
-        mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led, initial_state=mqtt_client.current_state)
-    except (BrokenPipeError) as e:
-        print(f"BrokenPipeError: {e}")
-        mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led, initial_state=mqtt_client.current_state)
+    except (MQTT.MMQTTException, BrokenPipeError) as e:
+        print(f"Exception: {e}")
+        try:
+            mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led, initial_state=mqtt_client.current_state)
+        except (MQTT.MMQTTException) as err:
+            # Light up both to indicate that MQTT is not connecting properly
+            on_air_led.value = True
+            on_camera_led.value = True
