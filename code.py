@@ -8,12 +8,75 @@ import wifi
 import adafruit_minimqtt.adafruit_minimqtt as MQTT
 
 
-# retrieve mqtt info
-mqtt_port = os.getenv("MQTT_PORT")
-mqtt_address = os.getenv("MQTT_ADDRESS")
-mqtt_username = os.getenv("MQTT_USER")
-mqtt_password = os.getenv("MQTT_PASS")
-light_feed = f'{mqtt_username}/status'
+class LightClient(MQTT.MQTT):
+    """
+    Extension of MQTT class that helps with encapsulation
+    """
+    
+    def __init__(self, broker, port, username, password, socket_pool, light_feed, on_air_led, on_camera_led, initial_state='off'):
+        super().__init__(broker=broker, port=port, username=username, password=password, socket_pool=socket_pool)
+        print("Creating new client")
+        
+        self.current_state = initial_state
+        self.light_feed = light_feed
+        self.on_air_led=on_air_led
+        self.on_camera_led=on_camera_led
+
+        # make sure we have last will and testament set
+        self.will_set(light_feed, "offline", qos=1, retain=True)
+
+        print(f"attempting to connect to mqtt at {broker} on port {port}")
+        self.connect()
+        self.subscribe(light_feed, 1)
+    
+    # define callback functions
+    def on_connect(self, mqtt_client, userdata, flags, rc):
+        print("Connected to MQTT Broker!")
+        print("Flags: {0}\n RC: {1}".format(flags, rc))
+
+
+    def on_disconnect(self, mqtt_client, userdata, rc):
+        print("Disconnected from MQTT Broker! Attempting to reconnect")
+        while not self.is_connected():
+            self.reconnect()
+
+
+    def on_message(self, client, topic, message):
+        print("New message on topic {0}: {1}".format(topic, message))
+        if not (topic == self.light_feed):
+            return
+        self.process_message(message)
+
+    def process_message(self, message):
+        if message == "offline":
+            self.publish(self.light_feed, self.current_state, qos=1, retain=True)
+            return
+        
+        self.current_state = message
+        if message == "off":
+            self.on_air_led.value = False
+            self.on_camera_led.value = False
+        elif message == "on-air":
+            self.on_air_led.value = True
+            self.on_camera_led.value = False
+        elif message == "on-camera":
+            self.on_camera_led.value = True
+            self.on_air_led.value = False
+            
+            
+    # adjusts leds to display current state        
+    def display_current_state(self):
+        self.process_message(self.current_state)
+
+# retrieve mqtt info from settings.toml
+mqtt_info = {
+    'port': os.getenv("MQTT_PORT"),
+    'broker': os.getenv("MQTT_ADDRESS"),
+    'username': os.getenv("MQTT_USER"),
+    'password': os.getenv("MQTT_PASS"),
+    'password': os.getenv("MQTT_PASS"),
+    'light_feed': f'{os.getenv("MQTT_USER")}/status',
+}
 
 # set up lights
 on_air_led = digitalio.DigitalInOut(board.GP4)
@@ -23,7 +86,6 @@ on_camera_led.direction = digitalio.Direction.OUTPUT
 
 on_air_led.value = True
 on_camera_led.value = False
-state_history = ["off"]
 
 # pattern that indicates something has gone wrong with wifi/mqtt connection
 def error_flash(sleep_time, mqtt_err=False):
@@ -51,70 +113,11 @@ print('connected to wifi')
 #  prints IP address to REPL
 print("My IP address is", wifi.radio.ipv4_address)
 
-# define callback functions
-def connect(mqtt_client, userdata, flags, rc):
-    print("Connected to MQTT Broker!")
-    print("Flags: {0}\n RC: {1}".format(flags, rc))
 
 
-def disconnect(mqtt_client, userdata, rc):
-    print("Disconnected from MQTT Broker! Attempting to reconnect")
-    while not mqtt_client.is_connected():
-        mqtt_client.reconnect()
 
 
-def subscribe(mqtt_client, userdata, topic, granted_qos):
-    print("Subscribed to {0} with QOS level {1}".format(topic, granted_qos))
-
-
-def on_message(client, topic, message):
-    print("New message on topic {0}: {1}".format(topic, message))
-    if not (topic == light_feed):
-        return
-    process_message(message)
-
-def process_message(message):
-    if message != "offline":
-        state_history[0] = message
-    if message == "off":
-        on_air_led.value = False
-        on_camera_led.value = False
-    elif message == "on-air":
-        on_air_led.value = True
-        on_camera_led.value = False
-    elif message == "on-camera":
-        on_camera_led.value = True
-        on_air_led.value = False
-
-def new_mqtt_client():
-    print("Creating new client")
-    
-    new_client = MQTT.MQTT(
-        broker=mqtt_address,
-        port=mqtt_port,
-        username=mqtt_username,
-        password=mqtt_password,
-        socket_pool=pool,
-    )
-
-    # setup callback methods
-    new_client.on_connect = connect
-    new_client.on_disconnect = disconnect
-    new_client.on_message = on_message
-    
-    # make sure we have last will and testament set
-    new_client.will_set(light_feed, "offline", qos=1, retain=True)
-    
-    print(f"attempting to connect to mqtt at {new_client.broker} on port {new_client.port}")
-    new_client.connect()
-    while not new_client.is_connected():
-        error_flash(0.5, mqtt_err=True)
-    new_client.subscribe(light_feed, 1)
-    time.sleep(2)
-    new_client.publish(light_feed, state_history[0], qos=1, retain=True)
-    return new_client
-    
-mqtt_client = new_mqtt_client()
+mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led)
 
 
 # flash on both leds to signal we have connected
@@ -135,17 +138,17 @@ while True:
     while not mqtt_client.is_connected():
         disconnect_flag = True
         error_flash(0.5, mqtt_err=True)
-        
+
     # reset led from error flashing to prior state
     if disconnect_flag:
-        process_message(state_history[0])
+        mqtt_client.display_current_state()
         disconnect_flag = False
-    
+
     try:
         mqtt_client.loop()
     except (MQTT.MMQTTException) as e:
         print(f"MMQTTException: {e}")
-        mqtt_client = new_mqtt_client()
+        mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led, initial_state=mqtt_client.current_state)
     except (BrokenPipeError) as e:
         print(f"BrokenPipeError: {e}")
-        mqtt_client = new_mqtt_client()
+        mqtt_client = LightClient(**mqtt_info, socket_pool=pool, on_air_led=on_air_led, on_camera_led=on_camera_led, initial_state=mqtt_client.current_state)
